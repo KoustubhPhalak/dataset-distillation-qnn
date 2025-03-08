@@ -170,12 +170,15 @@ class Trainer(object):
         bwd_out = []
         bwd_grad = []
         for datas, gdatas, lrs, glrs in grad_infos:
-            bwd_out += list(lrs)
-            bwd_grad += list(glrs)
+            bwd_out.extend(lrs)
+            bwd_grad.extend(glrs)
             for d, g in zip(datas, gdatas):
-                d.grad.add_(g)
-        if len(bwd_out) > 0:
-            torch.autograd.backward(bwd_out, bwd_grad)
+                if d.grad is not None:
+                    d.grad.add_(g)
+                else:
+                    d.grad = g
+        if bwd_out:
+            torch.autograd.backward(bwd_out, grad_tensors=bwd_grad)
 
     def save_results(self, steps=None, visualize=True, subfolder=''):
         with torch.no_grad():
