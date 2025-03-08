@@ -28,6 +28,58 @@ class LeNet(utils.ReparamModule):
         out = self.fc3(out)
         return out
 
+# QNN
+class QNN(utils.ReparamModule):
+    supported_dims = {28, 32}
+
+    def __init__(self, state):
+        super(QNN, self).__init__()
+        self.num_qubits = 6
+        self.dev = qml.device("default.qubit", wires=self.num_qubits)
+        self.n_layers = 3
+        self.n_qnns = 1
+        self.diag = nn.Parameter(torch.randn(self.num_qubits, 2), requires_grad=True)
+        self.off_diag = nn.Parameter(torch.randn(self.num_qubits), requires_grad=True)
+
+        def herm_matrix(i):
+            """Builds guaranteed-Hermitian 2x2 matrix"""
+            mat = torch.stack([
+                torch.stack([self.diag[i,0], self.off_diag[i]]),
+                torch.stack([self.off_diag[i], self.diag[i,1]])
+            ])
+            return 0.5 * (mat + mat.T)
+
+        @qml.qnode(self.dev, interface="torch")
+        def qnn_pqc(inputs, weights):
+            qml.templates.AmplitudeEmbedding(inputs, wires=range(self.num_qubits), normalize=True)
+            qml.templates.StronglyEntanglingLayers(weights, wires=range(self.num_qubits))
+            return [qml.expval(qml.Hermitian(herm_matrix(i), wires=[i])) for i in range(self.num_qubits)]
+            
+        weight_shapes = {"weights": (self.n_layers, self.num_qubits, 3)}
+
+        self.alpha = nn.Parameter(torch.tensor(0.5), requires_grad=True)
+        self.beta = 1 - self.alpha
+        self.conv1 = nn.Conv2d(state.nc, 6, 5, padding=2 if state.input_size == 28 else 0)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.fc1 = nn.Linear(16 * 5 * 5, 120)
+        self.fc2 = nn.Linear(120, 64)
+        self.qnns = qml.qnn.TorchLayer(qnn_pqc, weight_shapes, init_method=torch.nn.init.xavier_normal_)
+        self.fc3 = nn.Linear(self.num_qubits, 1 if state.num_classes <= 2 else state.num_classes)
+        self.fc_residual = nn.Linear(64, 1 if state.num_classes <= 2 else state.num_classes)
+        self.fc_final = nn.Linear(1 if state.num_classes <= 2 else state.num_classes, 1 if state.num_classes <= 2 else state.num_classes)
+    
+    def forward(self, x):
+        out = F.relu(self.conv1(x), inplace=True)
+        out = F.max_pool2d(out, 2)
+        out = F.relu(self.conv2(out), inplace=True)
+        out = F.max_pool2d(out, 2)
+        out = out.view(out.size(0), -1)
+        out = F.relu(self.fc1(out), inplace=True)
+        out_for_residue = self.fc2(out)
+        out = self.qnns(out_for_residue)
+        out = self.alpha * self.fc3(out) + self.beta * F.relu(self.fc_residual(out_for_residue), inplace=True)
+        out = self.fc_final(out)
+        return out
 
 class AlexCifarNet(utils.ReparamModule):
     supported_dims = {32}
