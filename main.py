@@ -29,6 +29,10 @@ def train(state, model, epoch, optimizer):
         loss = F.cross_entropy(output, target)
         loss.backward()
         optimizer.step()
+
+        # Clamp the parameter
+        model.matrix.data.clamp_(min=-1.0, max=1.0)
+
         if state.log_interval > 0 and it % state.log_interval == 0:
             log_str = 'Epoch: {:4d} ({:2.0f}%)\tTrain Loss: {: >7.4f}'.format(
                 epoch, 100. * it / len(state.train_loader), loss.item())

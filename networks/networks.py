@@ -1,5 +1,7 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import pennylane as qml
 
 from . import utils
 
@@ -38,16 +40,16 @@ class QNN(utils.ReparamModule):
         self.dev = qml.device("default.qubit", wires=self.num_qubits)
         self.n_layers = 3
         self.n_qnns = 1
-        self.diag = nn.Parameter(torch.randn(self.num_qubits, 2), requires_grad=True)
-        self.off_diag = nn.Parameter(torch.randn(self.num_qubits), requires_grad=True)
+        self.matrix = nn.Parameter(torch.randn(self.num_qubits, 2, 2, 2), requires_grad=True)
 
         def herm_matrix(i):
             """Builds guaranteed-Hermitian 2x2 matrix"""
-            mat = torch.stack([
-                torch.stack([self.diag[i,0], self.off_diag[i]]),
-                torch.stack([self.off_diag[i], self.diag[i,1]])
+
+            A = torch.stack([
+                torch.view_as_complex(torch.cat((self.matrix[i, 0, 0], self.matrix[i, 0, 1])).view(2, 2)),
+                torch.view_as_complex(torch.cat((self.matrix[i, 1, 0], self.matrix[i, 1, 1])).view(2, 2))
             ])
-            return 0.5 * (mat + mat.T)
+            return (A + torch.conj(A).T)/2
 
         @qml.qnode(self.dev, interface="torch")
         def qnn_pqc(inputs, weights):
@@ -58,7 +60,6 @@ class QNN(utils.ReparamModule):
         weight_shapes = {"weights": (self.n_layers, self.num_qubits, 3)}
 
         self.alpha = nn.Parameter(torch.tensor(0.5), requires_grad=True)
-        self.beta = 1 - self.alpha
         self.conv1 = nn.Conv2d(state.nc, 6, 5, padding=2 if state.input_size == 28 else 0)
         self.conv2 = nn.Conv2d(6, 16, 5)
         self.fc1 = nn.Linear(16 * 5 * 5, 120)
@@ -77,7 +78,7 @@ class QNN(utils.ReparamModule):
         out = F.relu(self.fc1(out), inplace=True)
         out_for_residue = self.fc2(out)
         out = self.qnns(out_for_residue)
-        out = self.alpha * self.fc3(out) + self.beta * F.relu(self.fc_residual(out_for_residue), inplace=True)
+        out = self.alpha * self.fc3(out) + (1 - self.alpha) * F.relu(self.fc_residual(out_for_residue), inplace=True)
         out = self.fc_final(out)
         return out
 
